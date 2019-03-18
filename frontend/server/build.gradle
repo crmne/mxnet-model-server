@@ -2,6 +2,8 @@ dependencies {
     compile "io.netty:netty-all:${netty_version}"
     compile project(":modelarchive")
     compile "commons-cli:commons-cli:${commons_cli_version}"
+    compile "io.prometheus:simpleclient_log4j:${prometheus_client_version}"
+    compile "io.prometheus:simpleclient_httpserver:${prometheus_client_version}"
 
     testCompile "org.testng:testng:${testng_version}"
 }

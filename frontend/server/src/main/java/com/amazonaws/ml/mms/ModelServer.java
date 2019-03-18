@@ -29,6 +29,7 @@ import io.netty.channel.ServerChannel;
 import io.netty.handler.ssl.SslContext;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import io.netty.util.internal.logging.Slf4JLoggerFactory;
+import io.prometheus.client.exporter.HTTPServer;
 import java.io.File;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -65,6 +66,9 @@ public class ModelServer {
     public static void main(String[] args) {
         Options options = ConfigManager.Arguments.getOptions();
         try {
+            HTTPServer prometheusServer = new HTTPServer(8000, true);
+            System.out.println("Prometheus port " + prometheusServer.getPort()); // NOPMD
+
             DefaultParser parser = new DefaultParser();
             CommandLine cmd = parser.parse(options, args, null, false);
             ConfigManager.Arguments arguments = new ConfigManager.Arguments(cmd);
