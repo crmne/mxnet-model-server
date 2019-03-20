@@ -121,13 +121,13 @@ if __name__ == '__main__':
     requirements = ['Pillow', 'psutil', 'future', 'model-archiver']
 
     setup(
-        name='mxnet-model-server',
+        name='mxnet-model-server-prometheus',
         version=version,
-        description='Model Server for Apache MXNet is a tool for serving neural net models for inference',
+        description='Model Server for Apache MXNet is a tool for serving neural net models for inference. With Prometheus metrics.',
         author='MXNet SDK team',
-        author_email='noreply@amazon.com',
+        author_email='carmine@paolino.me',
         long_description=pypi_description(),
-        url='https://github.com/awslabs/mxnet-model-server',
+        url='https://github.com/crmne/mxnet-model-server',
         keywords='MXNet Model Server Serving Deep Learning Inference AI',
         packages=pkgs,
         cmdclass={
