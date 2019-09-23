@@ -47,13 +47,21 @@ public class WorkerLifeCycle {
         this.model = model;
     }
 
-    private String[] getEnvString(String cwd, String modelPath) {
+    private String[] getEnvString(String cwd, String modelPath, String handler) {
         ArrayList<String> envList = new ArrayList<>();
         Pattern blackList = configManager.getBlacklistPattern();
+        String handlerFile = handler;
+        if (handler.contains(":")) {
+            handlerFile = handler.split(":")[0];
+            if (handlerFile.contains("/")) {
+                handlerFile = handlerFile.substring(0, handlerFile.lastIndexOf('/'));
+            }
+        }
 
         StringBuilder pythonPath = new StringBuilder();
         HashMap<String, String> environment = new HashMap<>(System.getenv());
-
+        environment.putAll(configManager.getBackendConfiguration());
+        pythonPath.append(handlerFile).append(File.pathSeparatorChar);
         if (System.getenv("PYTHONPATH") != null) {
             pythonPath.append(System.getenv("PYTHONPATH")).append(File.pathSeparatorChar);
         }
@@ -98,7 +106,11 @@ public class WorkerLifeCycle {
         args[4] = connector.isUds() ? "--sock-name" : "--port";
         args[5] = connector.getSocketPath();
 
-        String[] envp = getEnvString(workingDir.getAbsolutePath(), modelPath.getAbsolutePath());
+        String[] envp =
+                getEnvString(
+                        workingDir.getAbsolutePath(),
+                        modelPath.getAbsolutePath(),
+                        model.getModelArchive().getManifest().getModel().getHandler());
 
         try {
             latch = new CountDownLatch(1);
@@ -135,9 +147,15 @@ public class WorkerLifeCycle {
     public synchronized void exit() {
         if (process != null) {
             process.destroyForcibly();
-            process = null;
             connector.clean();
         }
+    }
+
+    public synchronized Integer getExitValue() {
+        if (process != null && !process.isAlive()) {
+            return process.exitValue();
+        }
+        return null;
     }
 
     void setSuccess(boolean success) {

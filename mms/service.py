@@ -60,7 +60,7 @@ class Service(object):
             raise ValueError("Received invalid inputs")
 
         req_to_id_map = {}
-        headers = dict()
+        headers = []
         input_batch = []
         for batch_idx, request_batch in enumerate(batch):
             req_id = request_batch.get('requestId').decode("utf-8")
@@ -78,7 +78,7 @@ class Service(object):
                 for h in request_batch.get("headers"):
                     model_in_headers.update({h['name'].decode('utf-8'): h['value'].decode('utf-8')})
 
-            headers.update({req_id: model_in_headers})
+            headers.append(RequestProcessor(model_in_headers))
             input_batch.append(model_in)
             req_to_id_map[batch_idx] = req_id
 
@@ -97,7 +97,7 @@ class Service(object):
         headers, input_batch, req_id_map = Service.retrieve_data_for_inference(batch)
 
         self.context.request_ids = req_id_map
-        self.context.request_processor = RequestProcessor(headers)
+        self.context.request_processor = headers
         metrics = MetricsStore(req_id_map, self.context.model_name)
         self.context.metrics = metrics
 
@@ -106,6 +106,9 @@ class Service(object):
         # noinspection PyBroadException
         try:
             ret = self._entry_point(input_batch, self.context)
+        except MemoryError:
+            logger.error("System out of memory", exc_info=True)
+            return create_predict_response(None, req_id_map, "Out of resources", 507)
         except Exception:  # pylint: disable=broad-except
             logger.warning("Invoking custom service failed.", exc_info=True)
             return create_predict_response(None, req_id_map, "Prediction failed", 503)

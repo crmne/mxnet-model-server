@@ -12,6 +12,7 @@
  */
 package com.amazonaws.ml.mms.http;
 
+import com.amazonaws.ml.mms.archive.ModelException;
 import com.amazonaws.ml.mms.archive.ModelNotFoundException;
 import com.amazonaws.ml.mms.openapi.OpenApiUtils;
 import com.amazonaws.ml.mms.util.NettyUtils;
@@ -34,18 +35,21 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.ai.mms.servingsdk.ModelServerEndpoint;
 
 /**
  * A class handling inbound HTTP requests to the management API.
  *
  * <p>This class
  */
-public class InferenceRequestHandler extends HttpRequestHandler {
+public class InferenceRequestHandler extends HttpRequestHandlerChain {
 
     private static final Logger logger = LoggerFactory.getLogger(InferenceRequestHandler.class);
 
     /** Creates a new {@code InferenceRequestHandler} instance. */
-    public InferenceRequestHandler() {}
+    public InferenceRequestHandler(Map<String, ModelServerEndpoint> ep) {
+        endpointMap = ep;
+    }
 
     @Override
     protected void handleRequest(
@@ -53,29 +57,54 @@ public class InferenceRequestHandler extends HttpRequestHandler {
             FullHttpRequest req,
             QueryStringDecoder decoder,
             String[] segments)
-            throws ModelNotFoundException {
-        switch (segments[1]) {
-            case "ping":
-                ModelManager.getInstance().workerStatus(ctx);
-                break;
-            case "api-description":
-                handleApiDescription(ctx);
-                break;
-            case "invocations":
-                handleInvocations(ctx, req, decoder);
-                break;
-            case "predictions":
-                handlePredictions(ctx, req, segments);
-                break;
-            default:
-                handleLegacyPredict(ctx, req, decoder, segments);
-                break;
+            throws ModelException {
+        if (isInferenceReq(segments)) {
+            if (endpointMap.getOrDefault(segments[1], null) != null) {
+                handleCustomEndpoint(ctx, req, segments, decoder);
+            } else {
+                switch (segments[1]) {
+                    case "ping":
+                        ModelManager.getInstance().workerStatus(ctx);
+                        break;
+                    case "models":
+                    case "invocations":
+                        validatePredictionsEndpoint(segments);
+                        handleInvocations(ctx, req, decoder, segments);
+                        break;
+                    case "predictions":
+                        handlePredictions(ctx, req, segments);
+                        break;
+                    default:
+                        handleLegacyPredict(ctx, req, decoder, segments);
+                        break;
+                }
+            }
+        } else {
+            chain.handleRequest(ctx, req, decoder, segments);
         }
     }
 
-    @Override
-    protected void handleApiDescription(ChannelHandlerContext ctx) {
-        NettyUtils.sendJsonResponse(ctx, OpenApiUtils.listInferenceApis());
+    private boolean isInferenceReq(String[] segments) {
+        return segments.length == 0
+                || segments[1].equals("ping")
+                || (segments.length == 4 && segments[1].equals("models"))
+                || segments[1].equals("predictions")
+                || segments[1].equals("api-description")
+                || segments[1].equals("invocations")
+                || (segments.length == 3 && segments[2].equals("predict"))
+                || endpointMap.containsKey(segments[1]);
+    }
+
+    private void validatePredictionsEndpoint(String[] segments) {
+        if (segments.length == 2 && "invocations".equals(segments[1])) {
+            return;
+        } else if (segments.length == 4
+                && "models".equals(segments[1])
+                && "invoke".equals(segments[3])) {
+            return;
+        }
+
+        throw new ResourceNotFoundException();
     }
 
     private void handlePredictions(
@@ -88,10 +117,16 @@ public class InferenceRequestHandler extends HttpRequestHandler {
     }
 
     private void handleInvocations(
-            ChannelHandlerContext ctx, FullHttpRequest req, QueryStringDecoder decoder)
+            ChannelHandlerContext ctx,
+            FullHttpRequest req,
+            QueryStringDecoder decoder,
+            String[] segments)
             throws ModelNotFoundException {
-        String modelName = NettyUtils.getParameter(decoder, "model_name", null);
-        if ((modelName == null || modelName.isEmpty())) {
+        String modelName =
+                ("invocations".equals(segments[1]))
+                        ? NettyUtils.getParameter(decoder, "model_name", null)
+                        : segments[2];
+        if (modelName == null || modelName.isEmpty()) {
             if (ModelManager.getInstance().getStartupModels().size() == 1) {
                 modelName = ModelManager.getInstance().getStartupModels().iterator().next();
             }

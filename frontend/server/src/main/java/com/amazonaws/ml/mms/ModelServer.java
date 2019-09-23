@@ -15,8 +15,10 @@ package com.amazonaws.ml.mms;
 import com.amazonaws.ml.mms.archive.ModelArchive;
 import com.amazonaws.ml.mms.archive.ModelException;
 import com.amazonaws.ml.mms.metrics.MetricManager;
+import com.amazonaws.ml.mms.servingsdk.impl.PluginsManager;
 import com.amazonaws.ml.mms.util.ConfigManager;
 import com.amazonaws.ml.mms.util.Connector;
+import com.amazonaws.ml.mms.util.ConnectorType;
 import com.amazonaws.ml.mms.util.ServerGroups;
 import com.amazonaws.ml.mms.wlm.ModelManager;
 import com.amazonaws.ml.mms.wlm.WorkLoadManager;
@@ -32,10 +34,13 @@ import io.netty.util.internal.logging.Slf4JLoggerFactory;
 import io.prometheus.client.exporter.HTTPServer;
 import java.io.File;
 import java.io.IOException;
+import java.lang.annotation.Annotation;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.InvalidPropertiesFormatException;
 import java.util.List;
+import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -46,6 +51,9 @@ import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.ai.mms.servingsdk.ModelServerEndpoint;
+import software.amazon.ai.mms.servingsdk.annotations.Endpoint;
+import software.amazon.ai.mms.servingsdk.annotations.helpers.EndpointTypes;
 
 public class ModelServer {
 
@@ -54,7 +62,6 @@ public class ModelServer {
     private ServerGroups serverGroups;
     private List<ChannelFuture> futures = new ArrayList<>(2);
     private AtomicBoolean stopped = new AtomicBoolean(false);
-
     private ConfigManager configManager;
 
     /** Creates a new {@code ModelServer} instance. */
@@ -75,7 +82,7 @@ public class ModelServer {
             ConfigManager.init(arguments);
 
             ConfigManager configManager = ConfigManager.getInstance();
-
+            PluginsManager.getInstance().initialize();
             InternalLoggerFactory.setDefaultFactory(Slf4JLoggerFactory.INSTANCE);
             new ModelServer(configManager).startAndWait();
         } catch (IllegalArgumentException e) {
@@ -107,11 +114,20 @@ public class ModelServer {
         }
     }
 
+    private String getDefaultModelName(String name) {
+        if (name.contains(".model") || name.contains(".mar")) {
+            return name.substring(name.lastIndexOf('/') + 1, name.lastIndexOf('.'))
+                    .replaceAll("(\\W|^_)", "_");
+        } else {
+            return name.substring(name.lastIndexOf('/') + 1).replaceAll("(\\W|^_)", "_");
+        }
+    }
+
     private void initModelStore() {
         WorkLoadManager wlm = new WorkLoadManager(configManager, serverGroups.getBackendGroup());
         ModelManager.init(configManager, wlm);
         Set<String> startupModels = ModelManager.getInstance().getStartupModels();
-
+        String defaultModelName;
         String loadModels = configManager.getLoadModels();
         if (loadModels == null || loadModels.isEmpty()) {
             return;
@@ -147,8 +163,10 @@ public class ModelServer {
                     }
                     try {
                         logger.debug("Loading models from model store: {}", file.getName());
+                        defaultModelName = getDefaultModelName(fileName);
 
-                        ModelArchive archive = modelManager.registerModel(file.getName());
+                        ModelArchive archive =
+                                modelManager.registerModel(file.getName(), defaultModelName);
                         modelManager.updateModel(archive.getModelName(), workers, workers);
                         startupModels.add(archive.getModelName());
                     } catch (ModelException | IOException e) {
@@ -176,6 +194,7 @@ public class ModelServer {
 
             try {
                 logger.info("Loading initial models: {}", url);
+                defaultModelName = getDefaultModelName(url);
 
                 ModelArchive archive =
                         modelManager.registerModel(
@@ -185,7 +204,8 @@ public class ModelServer {
                                 null,
                                 1,
                                 100,
-                                configManager.getDefaultResponseTimeout());
+                                configManager.getDefaultResponseTimeout(),
+                                defaultModelName);
                 modelManager.updateModel(archive.getModelName(), workers, workers);
                 startupModels.add(archive.getModelName());
             } catch (ModelException | IOException e) {
@@ -195,13 +215,14 @@ public class ModelServer {
     }
 
     public ChannelFuture initializeServer(
-            Connector connector, EventLoopGroup serverGroup, EventLoopGroup workerGroup)
+            Connector connector,
+            EventLoopGroup serverGroup,
+            EventLoopGroup workerGroup,
+            ConnectorType type)
             throws InterruptedException, IOException, GeneralSecurityException {
         final String purpose = connector.getPurpose();
-
         Class<? extends ServerChannel> channelClass = connector.getServerChannel();
         logger.info("Initialize {} server with: {}.", purpose, channelClass.getSimpleName());
-
         ServerBootstrap b = new ServerBootstrap();
         b.option(ChannelOption.SO_BACKLOG, 1024)
                 .channel(channelClass)
@@ -214,7 +235,7 @@ public class ModelServer {
         if (connector.isSsl()) {
             sslCtx = configManager.getSslContext();
         }
-        b.childHandler(new ServerInitializer(sslCtx, connector.isManagement()));
+        b.childHandler(new ServerInitializer(sslCtx, type));
 
         ChannelFuture future;
         try {
@@ -269,10 +290,7 @@ public class ModelServer {
 
         Connector inferenceConnector = configManager.getListener(false);
         Connector managementConnector = configManager.getListener(true);
-        if (inferenceConnector.equals(managementConnector)) {
-            throw new IllegalArgumentException(
-                    "Inference port must differ from the management port");
-        }
+
         inferenceConnector.clean();
         managementConnector.clean();
 
@@ -280,10 +298,48 @@ public class ModelServer {
         EventLoopGroup workerGroup = serverGroups.getChildGroup();
 
         futures.clear();
-        futures.add(initializeServer(inferenceConnector, serverGroup, workerGroup));
-        futures.add(initializeServer(managementConnector, serverGroup, workerGroup));
+
+        if (!inferenceConnector.equals(managementConnector)) {
+            futures.add(
+                    initializeServer(
+                            inferenceConnector,
+                            serverGroup,
+                            workerGroup,
+                            ConnectorType.INFERENCE_CONNECTOR));
+            futures.add(
+                    initializeServer(
+                            managementConnector,
+                            serverGroup,
+                            workerGroup,
+                            ConnectorType.MANAGEMENT_CONNECTOR));
+        } else {
+            futures.add(
+                    initializeServer(
+                            inferenceConnector, serverGroup, workerGroup, ConnectorType.BOTH));
+        }
 
         return futures;
+    }
+
+    private boolean validEndpoint(Annotation a, EndpointTypes type) {
+        return a instanceof Endpoint
+                && !((Endpoint) a).urlPattern().isEmpty()
+                && ((Endpoint) a).endpointType().equals(type);
+    }
+
+    private HashMap<String, ModelServerEndpoint> registerEndpoints(EndpointTypes type) {
+        ServiceLoader<ModelServerEndpoint> loader = ServiceLoader.load(ModelServerEndpoint.class);
+        HashMap<String, ModelServerEndpoint> ep = new HashMap<>();
+        for (ModelServerEndpoint mep : loader) {
+            Class<? extends ModelServerEndpoint> modelServerEndpointClassObj = mep.getClass();
+            Annotation[] annotations = modelServerEndpointClassObj.getAnnotations();
+            for (Annotation a : annotations) {
+                if (validEndpoint(a, type)) {
+                    ep.put(((Endpoint) a).urlPattern(), mep);
+                }
+            }
+        }
+        return ep;
     }
 
     public boolean isRunning() {

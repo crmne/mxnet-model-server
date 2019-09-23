@@ -325,6 +325,10 @@ public class ModelArchive {
         }
     }
 
+    public String getHandler() {
+        return manifest.getModel().getHandler();
+    }
+
     public Manifest getManifest() {
         return manifest;
     }

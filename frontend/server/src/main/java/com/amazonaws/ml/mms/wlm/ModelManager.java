@@ -66,9 +66,17 @@ public final class ModelManager {
         return modelManager;
     }
 
-    public ModelArchive registerModel(String url) throws ModelException, IOException {
+    public ModelArchive registerModel(String url, String defaultModelName)
+            throws ModelException, IOException {
         return registerModel(
-                url, null, null, null, 1, 100, configManager.getDefaultResponseTimeout());
+                url,
+                null,
+                null,
+                null,
+                1,
+                100,
+                configManager.getDefaultResponseTimeout(),
+                defaultModelName);
     }
 
     public ModelArchive registerModel(
@@ -78,11 +86,15 @@ public final class ModelManager {
             String handler,
             int batchSize,
             int maxBatchDelay,
-            int responseTimeout)
+            int responseTimeout,
+            String defaultModelName)
             throws ModelException, IOException {
 
         ModelArchive archive = ModelArchive.downloadModel(configManager.getModelStore(), url);
         if (modelName == null || modelName.isEmpty()) {
+            if (archive.getModelName() == null || archive.getModelName().isEmpty()) {
+                archive.getManifest().getModel().setModelName(defaultModelName);
+            }
             modelName = archive.getModelName();
         } else {
             archive.getManifest().getModel().setModelName(modelName);
@@ -92,6 +104,10 @@ public final class ModelManager {
         }
         if (handler != null) {
             archive.getManifest().getModel().setHandler(handler);
+        } else if (archive.getHandler() == null || archive.getHandler().isEmpty()) {
+            archive.getManifest()
+                    .getModel()
+                    .setHandler(configManager.getMmsDefaultServiceHandler());
         }
 
         archive.validate();
@@ -126,7 +142,7 @@ public final class ModelManager {
         return true;
     }
 
-    public CompletableFuture<Boolean> updateModel(
+    public CompletableFuture<HttpResponseStatus> updateModel(
             String modelName, int minWorkers, int maxWorkers) {
         Model model = models.get(modelName);
         if (model == null) {

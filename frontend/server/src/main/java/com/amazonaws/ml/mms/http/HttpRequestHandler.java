@@ -18,7 +18,6 @@ import com.amazonaws.ml.mms.util.NettyUtils;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.FullHttpRequest;
-import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import org.slf4j.Logger;
@@ -29,12 +28,16 @@ import org.slf4j.LoggerFactory;
  *
  * <p>This class
  */
-public abstract class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
+public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
     private static final Logger logger = LoggerFactory.getLogger(HttpRequestHandler.class);
-
+    HttpRequestHandlerChain handlerChain;
     /** Creates a new {@code HttpRequestHandler} instance. */
     public HttpRequestHandler() {}
+
+    public HttpRequestHandler(HttpRequestHandlerChain chain) {
+        handlerChain = chain;
+    }
 
     /** {@inheritDoc} */
     @Override
@@ -44,19 +47,11 @@ public abstract class HttpRequestHandler extends SimpleChannelInboundHandler<Ful
             if (!req.decoderResult().isSuccess()) {
                 throw new BadRequestException("Invalid HTTP message.");
             }
-
             QueryStringDecoder decoder = new QueryStringDecoder(req.uri());
             String path = decoder.path();
-            if ("/".equals(path)) {
-                if (HttpMethod.OPTIONS.equals(req.method())) {
-                    handleApiDescription(ctx);
-                    return;
-                }
-                throw new MethodNotAllowedException();
-            }
 
             String[] segments = path.split("/");
-            handleRequest(ctx, req, decoder, segments);
+            handlerChain.handleRequest(ctx, req, decoder, segments);
         } catch (ResourceNotFoundException | ModelNotFoundException e) {
             logger.trace("", e);
             NettyUtils.sendError(ctx, HttpResponseStatus.NOT_FOUND, e);
@@ -69,25 +64,22 @@ public abstract class HttpRequestHandler extends SimpleChannelInboundHandler<Ful
         } catch (ServiceUnavailableException e) {
             logger.trace("", e);
             NettyUtils.sendError(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, e);
+        } catch (OutOfMemoryError e) {
+            logger.trace("", e);
+            NettyUtils.sendError(ctx, HttpResponseStatus.INSUFFICIENT_STORAGE, e);
         } catch (Throwable t) {
             logger.error("", t);
             NettyUtils.sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, t);
         }
     }
 
-    protected abstract void handleRequest(
-            ChannelHandlerContext ctx,
-            FullHttpRequest req,
-            QueryStringDecoder decoder,
-            String[] segments)
-            throws ModelException;
-
-    protected abstract void handleApiDescription(ChannelHandlerContext ctx);
-
     /** {@inheritDoc} */
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("", cause);
+        if (cause instanceof OutOfMemoryError) {
+            NettyUtils.sendError(ctx, HttpResponseStatus.INSUFFICIENT_STORAGE, cause);
+        }
         ctx.close();
     }
 }

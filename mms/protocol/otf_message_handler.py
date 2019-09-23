@@ -14,10 +14,10 @@ OTF Codec
 import json
 import logging
 import struct
+import os
 
 from builtins import bytearray
 from builtins import bytes
-
 
 int_size = 4
 END_OF_LIST = -1
@@ -44,10 +44,22 @@ def retrieve_msg(conn):
     return cmd, msg
 
 
+def encode_response_headers(resp_hdr_map):
+    msg = bytearray()
+    msg += struct.pack('!i', len(resp_hdr_map))
+    for k, v in resp_hdr_map.items():
+        msg += struct.pack('!i', len(k.encode('utf-8')))
+        msg += k.encode('utf-8')
+        msg += struct.pack('!i', len(v.encode('utf-8')))
+        msg += v.encode('utf-8')
+    return msg
+
+
 def create_predict_response(ret, req_id_map, message, code, context=None):
     """
     Create inference response.
 
+    :param context:
     :param ret:
     :param req_id_map:
     :param message:
@@ -62,19 +74,38 @@ def create_predict_response(ret, req_id_map, message, code, context=None):
     msg += buf
 
     for idx in req_id_map:
-        buf = req_id_map[idx].encode('utf-8')
-        msg += struct.pack("!i", len(buf))
-        msg += buf
+        req_id = req_id_map.get(idx).encode('utf-8')
+        msg += struct.pack("!i", len(req_id))
+        msg += req_id
 
+        # Encoding Content-Type
         if context is None:
             msg += struct.pack('!i', 0)  # content_type
         else:
-            content_type = context.get_response_content_type(req_id_map[idx])
+            content_type = context.get_response_content_type(idx)
             if content_type is None or len(content_type) == 0:
                 msg += struct.pack('!i', 0)  # content_type
             else:
                 msg += struct.pack('!i', len(content_type))
                 msg += content_type.encode('utf-8')
+
+        # Encoding the per prediction HTTP response code
+        if context is None:
+            # status code and reason phrase set to none
+            msg += struct.pack('!i', code)
+            msg += struct.pack('!i', 0)  # No code phrase is returned
+            # Response headers none
+            msg += struct.pack('!i', 0)
+        else:
+            sc, phrase = context.get_response_status(idx)
+            http_code = sc if sc is not None else 200
+            http_phrase = phrase if phrase is not None else ""
+
+            msg += struct.pack('!i', http_code)
+            msg += struct.pack("!i", len(http_phrase))
+            msg += http_phrase.encode("utf-8")
+            # Response headers
+            msg += encode_response_headers(context.get_response_headers(idx))
 
         if ret is None:
             buf = b"error"
@@ -82,13 +113,14 @@ def create_predict_response(ret, req_id_map, message, code, context=None):
             msg += buf
         else:
             val = ret[idx]
-            if isinstance(val, str):
+            # NOTE: Process bytes/bytearray case before processing the string case.
+            if isinstance(val, (bytes, bytearray)):
+                msg += struct.pack('!i', len(val))
+                msg += val
+            elif isinstance(val, str):
                 buf = val.encode("utf-8")
                 msg += struct.pack('!i', len(buf))
                 msg += buf
-            elif isinstance(val, (bytes, bytearray)):
-                msg += struct.pack('!i', len(val))
-                msg += val
             else:
                 try:
                     json_value = json.dumps(val, indent=2).encode("utf-8")
@@ -252,6 +284,7 @@ def _retrieve_input_data(conn):
     | content_type |
     | input data in bytes |
     """
+    decode_req = os.environ.get("MMS_DECODE_INPUT_REQUEST")
     length = _retrieve_int(conn)
     if length == -1:
         return None
@@ -265,12 +298,10 @@ def _retrieve_input_data(conn):
 
     length = _retrieve_int(conn)
     value = _retrieve_buffer(conn, length)
-
-    if content_type == "application/json":
+    if content_type == "application/json" and (decode_req is None or decode_req == "true"):
         model_input["value"] = json.loads(value.decode("utf-8"))
-    elif content_type.startswith("text"):
+    elif content_type.startswith("text") and (decode_req is None or decode_req == "true"):
         model_input["value"] = value.decode("utf-8")
     else:
         model_input["value"] = value
-
     return model_input

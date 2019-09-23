@@ -123,3 +123,10 @@ ENV/
 
 # Prop file in benchmark
 benchmarks/*.properties
+
+# intellij files
+*.iml
+
+# MMS files
+mms/frontend
+mms/plugins

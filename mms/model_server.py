@@ -71,13 +71,21 @@ def start():
 
             cmd.append("-Djava.io.tmpdir={}".format(tmp_dir))
 
-        if args.mms_config:
-            if not os.path.isfile(args.mms_config):
-                print("--mms-config file not found: {}".format(args.mms_config))
+        mms_config = args.mms_config
+        mms_conf_file = None
+        if mms_config:
+            if mms_config == "sagemaker":
+                mms_config = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                          "configs", "sagemaker_config.properties")
+            if not os.path.isfile(mms_config):
+                print("--mms-config file not found: {}".format(mms_config))
                 exit(1)
-            mms_conf_file = args.mms_config
+            mms_conf_file = mms_config
         else:
             mms_conf_file = "config.properties"
+
+        class_path = \
+            ".:{}".format(os.path.join(mms_home, "mms/frontend/*"))
 
         if os.path.isfile(mms_conf_file):
             props = load_properties(mms_conf_file)
@@ -89,17 +97,22 @@ def start():
                         if word.startswith("-Dlog4j.configuration="):
                             arg_list.remove(word)
                 cmd.extend(arg_list)
+            plugins = props.get("plugins_path", None)
+            if plugins:
+                class_path += ":" + plugins + "/*" if "*" not in plugins else ":" + plugins
 
-        cmd.append("-jar")
-        cmd.append("{}/mms/frontend/model-server.jar".format(mms_home))
+        cmd.append("-cp")
+        cmd.append(class_path)
+
+        cmd.append("com.amazonaws.ml.mms.ModelServer")
 
         # model-server.jar command line parameters
         cmd.append("--python")
         cmd.append(sys.executable)
 
-        if args.mms_config:
+        if mms_conf_file is not None:
             cmd.append("-f")
-            cmd.append(args.mms_config)
+            cmd.append(mms_conf_file)
 
         if args.model_store:
             if not os.path.isdir(args.model_store):
@@ -124,6 +137,8 @@ def start():
             pid = process.pid
             with open(pid_file, "w") as pf:
                 pf.write(str(pid))
+            if args.foreground:
+                process.wait()
         except OSError as e:
             if e.errno == 2:
                 print("java not found, please make sure JAVA_HOME is set properly.")

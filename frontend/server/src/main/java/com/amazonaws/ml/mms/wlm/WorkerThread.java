@@ -16,6 +16,7 @@ import com.amazonaws.ml.mms.metrics.Dimension;
 import com.amazonaws.ml.mms.metrics.Metric;
 import com.amazonaws.ml.mms.util.ConfigManager;
 import com.amazonaws.ml.mms.util.Connector;
+import com.amazonaws.ml.mms.util.NettyUtils;
 import com.amazonaws.ml.mms.util.codec.ModelRequestEncoder;
 import com.amazonaws.ml.mms.util.codec.ModelResponseDecoder;
 import com.amazonaws.ml.mms.util.messages.BaseModelRequest;
@@ -32,6 +33,7 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.util.UUID;
@@ -47,7 +49,7 @@ public class WorkerThread implements Runnable {
 
     static final Logger logger = LoggerFactory.getLogger(WorkerThread.class);
     private static final org.apache.log4j.Logger loggerMmsMetrics =
-            org.apache.log4j.Logger.getLogger(ConfigManager.MMS_METRICS_LOGGER);
+            org.apache.log4j.Logger.getLogger(ConfigManager.MODEL_SERVER_METRICS_LOGGER);
 
     private Metric workerLoadTime;
 
@@ -120,6 +122,8 @@ public class WorkerThread implements Runnable {
         thread.setName(getWorkerName());
         currentThread.set(thread);
         BaseModelRequest req = null;
+        HttpResponseStatus status = HttpResponseStatus.INTERNAL_SERVER_ERROR;
+
         try {
             connect();
 
@@ -148,10 +152,13 @@ public class WorkerThread implements Runnable {
                         break;
                     case LOAD:
                         if (reply.getCode() == 200) {
-                            setState(WorkerState.WORKER_MODEL_LOADED);
+                            setState(WorkerState.WORKER_MODEL_LOADED, HttpResponseStatus.OK);
                             backoffIdx = 0;
                         } else {
-                            setState(WorkerState.WORKER_ERROR);
+                            setState(
+                                    WorkerState.WORKER_ERROR,
+                                    HttpResponseStatus.valueOf(reply.getCode()));
+                            status = HttpResponseStatus.valueOf(reply.getCode());
                         }
                         break;
                     case UNLOAD:
@@ -171,6 +178,9 @@ public class WorkerThread implements Runnable {
             }
         } catch (WorkerInitializationException e) {
             logger.error("Backend worker error", e);
+        } catch (OutOfMemoryError oom) {
+            logger.error("Out of memory error when creating workers", oom);
+            status = HttpResponseStatus.INSUFFICIENT_STORAGE;
         } catch (Throwable t) {
             logger.warn("Backend worker thread exception.", t);
         } finally {
@@ -178,10 +188,16 @@ public class WorkerThread implements Runnable {
             // Runnable once this worker is finished. If currentThread keep holding the reference
             // of the thread, currentThread.interrupt() might kill next worker.
             currentThread.set(null);
-            if (req != null) {
-                aggregator.sendError(req, "Worker died.");
+            Integer exitValue = lifeCycle.getExitValue();
+
+            if (exitValue != null && exitValue == 137) {
+                status = HttpResponseStatus.INSUFFICIENT_STORAGE;
             }
-            setState(WorkerState.WORKER_STOPPED);
+
+            if (req != null) {
+                aggregator.sendError(req, "Worker died.", status);
+            }
+            setState(WorkerState.WORKER_STOPPED, status);
             lifeCycle.exit();
             retry();
         }
@@ -205,7 +221,7 @@ public class WorkerThread implements Runnable {
         }
 
         String modelName = model.getModelName();
-        setState(WorkerState.WORKER_STARTED);
+        setState(WorkerState.WORKER_STARTED, HttpResponseStatus.OK);
         final CountDownLatch latch = new CountDownLatch(1);
 
         final int responseBufferSize = configManager.getMaxResponseSize();
@@ -299,14 +315,15 @@ public class WorkerThread implements Runnable {
 
     public void shutdown() {
         running.set(false);
-        setState(WorkerState.WORKER_SCALED_DOWN);
+        setState(WorkerState.WORKER_SCALED_DOWN, HttpResponseStatus.OK);
         if (backendChannel != null) {
             backendChannel.close();
         }
         Thread thread = currentThread.getAndSet(null);
         if (thread != null) {
             thread.interrupt();
-            aggregator.sendError(null, "Worker scaled down.");
+            aggregator.sendError(
+                    null, "Worker scaled down.", HttpResponseStatus.INTERNAL_SERVER_ERROR);
 
             model.removeJobQueue(workerId);
         }
@@ -320,8 +337,8 @@ public class WorkerThread implements Runnable {
         return "W-" + port + '-' + modelName;
     }
 
-    void setState(WorkerState newState) {
-        listener.notifyChangeState(model.getModelName(), newState);
+    void setState(WorkerState newState, HttpResponseStatus status) {
+        listener.notifyChangeState(model.getModelName(), newState, status);
         logger.debug("{} State change {} -> {}", getWorkerName(), state, newState);
         long timeTaken = System.currentTimeMillis() - startTime;
         if (state != WorkerState.WORKER_SCALED_DOWN) {
@@ -366,6 +383,9 @@ public class WorkerThread implements Runnable {
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             logger.error("Unknown exception", cause);
+            if (cause instanceof OutOfMemoryError) {
+                NettyUtils.sendError(ctx, HttpResponseStatus.INSUFFICIENT_STORAGE, cause);
+            }
             ctx.close();
         }
     }

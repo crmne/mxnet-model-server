@@ -21,6 +21,8 @@ User can following parameters to start MMS, those parameters will override defau
 * **--model-store** This parameter will override `model_store` property in config.properties file.
 * **--models** This parameter will override `load_models' property in config.properties.
 * **--log-config** This parameter will override default log4j.properties.
+* **--foreground** This parameter will run the model server in foreground. If this option is
+                        disabled, the model server will run in the background.
 
 See [Running the Model Server](server.md) for detail.
 
@@ -153,12 +155,16 @@ By default, MMS will use all available GPUs for inference, you use `number_of_gp
 
 Most of those properties are designed for performance tuning. Adjusting those numbers will impact scalability and throughput.
 
+* enable_envvars_config: Enable configuring MMS through environment variables. When this option is set to "true", all the static configurations of MMS can come through environment variables as well. default: false
 * number_of_netty_threads: number frontend netty thread, default: number of logical processors available to the JVM.
 * netty_client_threads: number of backend netty thread, default: number of logical processors available to the JVM.
 * default_workers_per_model: number of workers to create for each model that loaded at startup time, default: available GPUs in system or number of logical processors available to the JVM.
 * job_queue_size: number inference jobs that frontend will queue before backend can serve, default 100.
 * async_logging: enable asynchronous logging for higher throughput, log output may be delayed if this is enabled, default: false.
 * default_response_timeout: Timeout, in seconds, used for model's backend workers before they are deemed unresponsive and rebooted. default: 120 seconds.
+* decode_input_request: Configuration to let backend workers to decode requests, when the content type is known. 
+If this is set to "true", backend workers do "Bytearray to JSON object" conversion when the content type is "application/json" and 
+the backend workers convert "Bytearray to utf-8 string" when the Content-Type of the request is set to "text*". default: true  
 
 ### config.properties Example
 

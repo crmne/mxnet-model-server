@@ -75,7 +75,7 @@ public final class NettyUtils {
                     DIMENSION);
 
     private static final org.apache.log4j.Logger loggerMmsMetrics =
-            org.apache.log4j.Logger.getLogger(ConfigManager.MMS_METRICS_LOGGER);
+            org.apache.log4j.Logger.getLogger(ConfigManager.MODEL_SERVER_METRICS_LOGGER);
 
     private NettyUtils() {}
 
@@ -129,6 +129,12 @@ public final class NettyUtils {
             ChannelHandlerContext ctx, HttpResponseStatus status, Throwable t) {
         ErrorResponse error =
                 new ErrorResponse(status.code(), t.getClass().getSimpleName(), t.getMessage());
+        sendJsonResponse(ctx, error, status);
+    }
+
+    public static void sendError(
+            ChannelHandlerContext ctx, HttpResponseStatus status, Throwable t, String msg) {
+        ErrorResponse error = new ErrorResponse(status.code(), t.getClass().getSimpleName(), msg);
         sendJsonResponse(ctx, error, status);
     }
 

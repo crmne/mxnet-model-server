@@ -16,17 +16,21 @@ import com.amazonaws.ml.mms.archive.Manifest;
 import com.amazonaws.ml.mms.archive.ModelArchive;
 import com.amazonaws.ml.mms.archive.ModelException;
 import com.amazonaws.ml.mms.archive.ModelNotFoundException;
-import com.amazonaws.ml.mms.openapi.OpenApiUtils;
+import com.amazonaws.ml.mms.http.messages.RegisterModelRequest;
 import com.amazonaws.ml.mms.util.ConfigManager;
+import com.amazonaws.ml.mms.util.JsonUtils;
 import com.amazonaws.ml.mms.util.NettyUtils;
 import com.amazonaws.ml.mms.wlm.Model;
 import com.amazonaws.ml.mms.wlm.ModelManager;
 import com.amazonaws.ml.mms.wlm.WorkerThread;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.QueryStringDecoder;
+import io.netty.util.CharsetUtil;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -34,16 +38,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
+import software.amazon.ai.mms.servingsdk.ModelServerEndpoint;
 
 /**
  * A class handling inbound HTTP requests to the management API.
  *
  * <p>This class
  */
-public class ManagementRequestHandler extends HttpRequestHandler {
+public class ManagementRequestHandler extends HttpRequestHandlerChain {
 
     /** Creates a new {@code ManagementRequestHandler} instance. */
-    public ManagementRequestHandler() {}
+    public ManagementRequestHandler(Map<String, ModelServerEndpoint> ep) {
+        endpointMap = ep;
+    }
 
     @Override
     protected void handleRequest(
@@ -52,36 +59,45 @@ public class ManagementRequestHandler extends HttpRequestHandler {
             QueryStringDecoder decoder,
             String[] segments)
             throws ModelException {
-        if (!"models".equals(segments[1])) {
-            throw new ResourceNotFoundException();
-        }
+        if (isManagementReq(segments)) {
+            if (endpointMap.getOrDefault(segments[1], null) != null) {
+                handleCustomEndpoint(ctx, req, segments, decoder);
+            } else {
+                if (!"models".equals(segments[1])) {
+                    throw new ResourceNotFoundException();
+                }
 
-        HttpMethod method = req.method();
-        if (segments.length < 3) {
-            if (HttpMethod.GET.equals(method)) {
-                handleListModels(ctx, decoder);
-                return;
-            } else if (HttpMethod.POST.equals(method)) {
-                handleRegisterModel(ctx, decoder);
-                return;
+                HttpMethod method = req.method();
+                if (segments.length < 3) {
+                    if (HttpMethod.GET.equals(method)) {
+                        handleListModels(ctx, decoder);
+                        return;
+                    } else if (HttpMethod.POST.equals(method)) {
+                        handleRegisterModel(ctx, decoder, req);
+                        return;
+                    }
+                    throw new MethodNotAllowedException();
+                }
+
+                if (HttpMethod.GET.equals(method)) {
+                    handleDescribeModel(ctx, segments[2]);
+                } else if (HttpMethod.PUT.equals(method)) {
+                    handleScaleModel(ctx, decoder, segments[2]);
+                } else if (HttpMethod.DELETE.equals(method)) {
+                    handleUnregisterModel(ctx, segments[2]);
+                } else {
+                    throw new MethodNotAllowedException();
+                }
             }
-            throw new MethodNotAllowedException();
-        }
-
-        if (HttpMethod.GET.equals(method)) {
-            handleDescribeModel(ctx, segments[2]);
-        } else if (HttpMethod.PUT.equals(method)) {
-            handleScaleModel(ctx, decoder, segments[2]);
-        } else if (HttpMethod.DELETE.equals(method)) {
-            handleUnregisterModel(ctx, segments[2]);
         } else {
-            throw new MethodNotAllowedException();
+            chain.handleRequest(ctx, req, decoder, segments);
         }
     }
 
-    @Override
-    protected void handleApiDescription(ChannelHandlerContext ctx) {
-        NettyUtils.sendJsonResponse(ctx, OpenApiUtils.listManagementApis());
+    private boolean isManagementReq(String[] segments) {
+        return segments.length == 0
+                || ((segments.length == 2 || segments.length == 3) && segments[1].equals("models"))
+                || endpointMap.containsKey(segments[1]);
     }
 
     private void handleListModels(ChannelHandlerContext ctx, QueryStringDecoder decoder) {
@@ -154,23 +170,23 @@ public class ManagementRequestHandler extends HttpRequestHandler {
         NettyUtils.sendJsonResponse(ctx, resp);
     }
 
-    private void handleRegisterModel(ChannelHandlerContext ctx, QueryStringDecoder decoder)
+    private void handleRegisterModel(
+            ChannelHandlerContext ctx, QueryStringDecoder decoder, FullHttpRequest req)
             throws ModelException {
-        String modelUrl = NettyUtils.getParameter(decoder, "url", null);
+        RegisterModelRequest registerModelRequest = parseRequest(req, decoder);
+        String modelUrl = registerModelRequest.getModelUrl();
         if (modelUrl == null) {
             throw new BadRequestException("Parameter url is required.");
         }
 
-        String modelName = NettyUtils.getParameter(decoder, "model_name", null);
-        String runtime = NettyUtils.getParameter(decoder, "runtime", null);
-        String handler = NettyUtils.getParameter(decoder, "handler", null);
-        int batchSize = NettyUtils.getIntParameter(decoder, "batch_size", 1);
-        int maxBatchDelay = NettyUtils.getIntParameter(decoder, "max_batch_delay", 100);
-        int initialWorkers = NettyUtils.getIntParameter(decoder, "initial_workers", 0);
-        boolean synchronous =
-                Boolean.parseBoolean(NettyUtils.getParameter(decoder, "synchronous", null));
-        int responseTimeout =
-                Integer.parseInt(NettyUtils.getParameter(decoder, "response_timeout", "-1"));
+        String modelName = registerModelRequest.getModelName();
+        String runtime = registerModelRequest.getRuntime();
+        String handler = registerModelRequest.getHandler();
+        int batchSize = registerModelRequest.getBatchSize();
+        int maxBatchDelay = registerModelRequest.getMaxBatchDelay();
+        int initialWorkers = registerModelRequest.getInitialWorkers();
+        boolean synchronous = registerModelRequest.getSynchronous();
+        int responseTimeout = registerModelRequest.getResponseTimeout();
         if (responseTimeout == -1) {
             responseTimeout = ConfigManager.getInstance().getDefaultResponseTimeout();
         }
@@ -186,6 +202,7 @@ public class ManagementRequestHandler extends HttpRequestHandler {
         ModelManager modelManager = ModelManager.getInstance();
         final ModelArchive archive;
         try {
+
             archive =
                     modelManager.registerModel(
                             modelUrl,
@@ -194,7 +211,8 @@ public class ManagementRequestHandler extends HttpRequestHandler {
                             handler,
                             batchSize,
                             maxBatchDelay,
-                            responseTimeout);
+                            responseTimeout,
+                            null);
         } catch (IOException e) {
             throw new InternalServerException("Failed to save model: " + modelUrl, e);
         }
@@ -256,7 +274,7 @@ public class ManagementRequestHandler extends HttpRequestHandler {
             final Function<Void, Void> onError) {
 
         ModelManager modelManager = ModelManager.getInstance();
-        CompletableFuture<Boolean> future =
+        CompletableFuture<HttpResponseStatus> future =
                 modelManager.updateModel(modelName, minWorkers, maxWorkers);
         if (!synchronous) {
             NettyUtils.sendJsonResponse(
@@ -268,12 +286,10 @@ public class ManagementRequestHandler extends HttpRequestHandler {
         future.thenApply(
                         v -> {
                             boolean status = modelManager.scaleRequestStatus(modelName);
-                            if (v) {
+                            if (HttpResponseStatus.OK.equals(v)) {
                                 if (status) {
                                     NettyUtils.sendJsonResponse(
-                                            ctx,
-                                            new StatusResponse("Workers scaled"),
-                                            HttpResponseStatus.OK);
+                                            ctx, new StatusResponse("Workers scaled"), v);
                                 } else {
                                     NettyUtils.sendJsonResponse(
                                             ctx,
@@ -283,7 +299,7 @@ public class ManagementRequestHandler extends HttpRequestHandler {
                             } else {
                                 NettyUtils.sendError(
                                         ctx,
-                                        HttpResponseStatus.INTERNAL_SERVER_ERROR,
+                                        v,
                                         new InternalServerException("Failed to start workers"));
                                 if (onError != null) {
                                     onError.apply(null);
@@ -299,5 +315,18 @@ public class ManagementRequestHandler extends HttpRequestHandler {
                             NettyUtils.sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, e);
                             return null;
                         });
+    }
+
+    private RegisterModelRequest parseRequest(FullHttpRequest req, QueryStringDecoder decoder) {
+        RegisterModelRequest in;
+        CharSequence mime = HttpUtil.getMimeType(req);
+        if (HttpHeaderValues.APPLICATION_JSON.contentEqualsIgnoreCase(mime)) {
+            in =
+                    JsonUtils.GSON.fromJson(
+                            req.content().toString(CharsetUtil.UTF_8), RegisterModelRequest.class);
+        } else {
+            in = new RegisterModelRequest(decoder);
+        }
+        return in;
     }
 }

@@ -6,7 +6,7 @@ MXNet Model Server (MMS) can be used with any container service. In this guide, 
 
 ## Contents of this Document
 * [Quickstart](https://github.com/awslabs/mxnet-model-server/blob/master/docker/README.md#quickstart)
-* [Available pre-built continers](https://github.com/awslabs/mxnet-model-server/blob/master/docker/README.md#available-pre-built-continers)
+* [Available pre-built containers](https://github.com/awslabs/mxnet-model-server/blob/master/docker/README.md#available-pre-built-containers)
 * [Configuring MMS with Docker](https://github.com/awslabs/mxnet-model-server/blob/master/docker/README.md#configuring-mms-with-docker)
 
 
@@ -66,7 +66,7 @@ Now that you have tested it out, you may stop the Docker container. The followin
 docker rm -f mms
 ```
 
-## Available pre-built continers
+## Available pre-built containers
 We have following container tags available on [Docker Hub](https://hub.docker.com/r/awsdeeplearningteam/mxnet-model-server/).
 1. *latest*: This is the latest officially released MMS CPU container. This is based on the latest [Dockerfile.cpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/Dockerfile.cpu).
 2. *latest-gpu*: This is the latest officially released MMS GPU container. This is based on the latest [Dockerfile.gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/Dockerfile.gpu).
@@ -74,6 +74,14 @@ We have following container tags available on [Docker Hub](https://hub.docker.co
 4. *(MMS Release Tag)-mxnet-cpu*: Each released version since MMS 1.0.0 has an individual release tagged GPU MXNet container. These containers are based on [Dockerfile.gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/Dockerfile.gpu), in that MMS release.
 5. *nightly-mxnet-cpu*: This is the official CPU container which is built based on the nightly release of MMS pip package. This is built from [Dockerfile.nightly-cpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/Dockerfile.nightly-cpu).
 6. *nightly-mxnet-gpu*: This is the official GPU container which is built based on the nightly release of MMS pip package. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/Dockerfile.nightly-gpu).
+7. *base-cpu-py2.7*: This is the official Base Python 2.7 CPU container which contains only MMS and python. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/advanced-dockerfiles/Dockerfile.base.ubuntu_16_04.py2_7). Please note, this container doesn't have any DL/ML engine installed by definition, it is meant to be used for cases where you would like to bring your own engine/framework into container. **WARNING: Python 2.x will be deprecated from Jan 1 2020.**
+8. *base-cpu-py3.6*: This is the official Base Python 3.6 CPU container which contains only MMS and python. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/advanced-dockerfiles/Dockerfile.base.ubuntu_16_04.py3_6). Please note, this container doesn't have any DL/ML engine installed by definition, it is meant to be used for cases where you would like to bring your own engine/framework into container.
+9. *base-gpu-py2.7*: This is the official Base Python 2.7 GPU container which contains only MMS and python. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/advanced-dockerfiles/Dockerfile.base.nvidia_cu92_ubuntu_16_04.py2_7). Please note, this container doesn't have any DL/ML engine installed by definition, it is meant to be used for cases where you would like to bring your own engine/framework into container. **WARNING: Python 2.x will be deprecated from Jan 1 2020.**
+10. *base-gpu-py3.6*: This is the official Base Python 3.6 GPU container which contains only MMS and python. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/advanced-dockerfiles/Dockerfile.base.nvidia_cu92_ubuntu_16_04.py3_6). Please note, this container doesn't have any DL/ML engine installed by definition, it is meant to be used for cases where you would like to bring your own engine/framework into container.
+11. *nightly-base-cpu-py2.7*: This is the official Nightly Base Python 2.7 CPU container which contains only MMS and python. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/advanced-dockerfiles/Dockerfile.base.ubuntu_16_04.py2_7). Please note, this container doesn't have any DL/ML engine installed by definition, it is meant to be used for cases where you would like to bring your own engine/framework into container. **WARNING: Python 2.x will be deprecated from Jan 1 2020.**
+12. *nightly-base-cpu-py3.6*: This is the official Nightly Base Python 3.6 CPU container which contains only MMS and python. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/advanced-dockerfiles/Dockerfile.base.ubuntu_16_04.py3_6). Please note, this container doesn't have any DL/ML engine installed by definition, it is meant to be used for cases where you would like to bring your own engine/framework into container.
+13. *nightly-base-gpu-py2.7*: This is the official Nightly Base Python 2.7 GPU container which contains only MMS and python. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/advanced-dockerfiles/Dockerfile.base.nvidia_cu92_ubuntu_16_04.py2_7). Please note, this container doesn't have any DL/ML engine installed by definition, it is meant to be used for cases where you would like to bring your own engine/framework into container. **WARNING: Python 2.x will be deprecated from Jan 1 2020.**
+14. *nightly-base-gpu-py3.6*: This is the official Nightly Base Python 3.6 GPU container which contains only MMS and python. This is built from [Dockerfile.nightly-gpu](https://github.com/awslabs/mxnet-model-server/blob/master/docker/advanced-dockerfiles/Dockerfile.base.nvidia_cu92_ubuntu_16_04.py3_6). Please note, this container doesn't have any DL/ML engine installed by definition, it is meant to be used for cases where you would like to bring your own engine/framework into container.
 
 To pull the a particular container, run the following command
 

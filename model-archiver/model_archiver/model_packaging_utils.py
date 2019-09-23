@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import zipfile
+import shutil
 from .model_archiver_error import ModelArchiverError
 
 from .manifest_components.engine import Engine
@@ -24,7 +25,12 @@ from .manifest_components.manifest import Manifest
 from .manifest_components.model import Model
 from .manifest_components.publisher import Publisher
 
-MODEL_ARCHIVE_EXTENSION = '.mar'
+archiving_options = {
+    "tgz": ".tar.gz",
+    "no-archive": "",
+    "default": ".mar"
+}
+
 MODEL_SERVER_VERSION = '1.0'
 MODEL_ARCHIVE_VERSION = '1.0'
 MANIFEST_FILE_NAME = 'MANIFEST.json'
@@ -39,9 +45,14 @@ class ModelExportUtils(object):
     """
 
     @staticmethod
-    def check_mar_already_exists(model_name, export_file_path, overwrite):
+    def get_archive_export_path(export_file_path, model_name, archive_format):
+        return os.path.join(export_file_path, '{}{}'.format(model_name, archiving_options.get(archive_format)))
+
+    @staticmethod
+    def check_mar_already_exists(model_name, export_file_path, overwrite, archive_format="default"):
         """
         Function to check if .mar already exists
+        :param archive_format:
         :param model_name:
         :param export_file_path:
         :param overwrite:
@@ -50,7 +61,7 @@ class ModelExportUtils(object):
         if export_file_path is None:
             export_file_path = os.getcwd()
 
-        export_file = os.path.join(export_file_path, '{}{}'.format(model_name, MODEL_ARCHIVE_EXTENSION))
+        export_file = ModelExportUtils.get_archive_export_path(export_file_path, model_name, archive_format)
 
         if os.path.exists(export_file):
             if overwrite:
@@ -217,9 +228,15 @@ class ModelExportUtils(object):
             os.remove(f)
 
     @staticmethod
-    def zip(export_file, model_name, model_path, files_to_exclude, manifest):
+    def make_dir(d):
+        if not os.path.isdir(d):
+            os.makedirs(d)
+
+    @staticmethod
+    def archive(export_file, model_name, model_path, files_to_exclude, manifest, archive_format="default"):
         """
         Create a model-archive
+        :param archive_format:
         :param export_file:
         :param model_name:
         :param model_path:
@@ -227,12 +244,33 @@ class ModelExportUtils(object):
         :param manifest:
         :return:
         """
-        mar_path = os.path.join(export_file, '{}{}'.format(model_name, MODEL_ARCHIVE_EXTENSION))
+        mar_path = ModelExportUtils.get_archive_export_path(export_file, model_name, archive_format)
         try:
-            with zipfile.ZipFile(mar_path, 'w', zipfile.ZIP_DEFLATED) as z:
-                ModelExportUtils.zip_dir(model_path, z, set(files_to_exclude))
-                # Write the manifest here now as a json
-                z.writestr(os.path.join(MAR_INF, MANIFEST_FILE_NAME), manifest)
+            if archive_format == "tgz":
+                import tarfile
+                from io import BytesIO
+                with tarfile.open(mar_path, 'w:gz') as z:
+                    ModelExportUtils.archive_dir(model_path, z, set(files_to_exclude), archive_format, model_name)
+                    # Write the manifest here now as a json
+                    tar_manifest = tarfile.TarInfo(name=os.path.join(model_name, MAR_INF, MANIFEST_FILE_NAME))
+                    tar_manifest.size = len(manifest.encode('utf-8'))
+                    z.addfile(tarinfo=tar_manifest, fileobj=BytesIO(manifest.encode()))
+                    z.close()
+            elif archive_format == "no-archive":
+                if model_path != mar_path:
+                    # Copy files to export path if
+                    ModelExportUtils.archive_dir(model_path, mar_path,
+                                                 set(files_to_exclude), archive_format, model_name)
+                # Write the MANIFEST in place
+                manifest_path = os.path.join(mar_path, MAR_INF)
+                ModelExportUtils.make_dir(manifest_path)
+                with open(os.path.join(manifest_path, MANIFEST_FILE_NAME), "w") as f:
+                    f.write(manifest)
+            else:
+                with zipfile.ZipFile(mar_path, 'w', zipfile.ZIP_DEFLATED) as z:
+                    ModelExportUtils.archive_dir(model_path, z, set(files_to_exclude), archive_format, model_name)
+                    # Write the manifest here now as a json
+                    z.writestr(os.path.join(MAR_INF, MANIFEST_FILE_NAME), manifest)
         except IOError:
             logging.error("Failed to save the model-archive to model-path \"%s\". "
                           "Check the file permissions and retry.", export_file)
@@ -242,12 +280,14 @@ class ModelExportUtils(object):
             raise
 
     @staticmethod
-    def zip_dir(path, ziph, files_to_exclude):
+    def archive_dir(path, dst, files_to_exclude, archive_format, model_name):
 
         """
         This method zips the dir and filters out some files based on a expression
+        :param archive_format:
         :param path:
-        :param ziph:
+        :param dst:
+        :param model_name:
         :param files_to_exclude:
         :return:
         """
@@ -260,7 +300,14 @@ class ModelExportUtils(object):
             files[:] = [f for f in files if ModelExportUtils.file_filter(f, files_to_exclude)]
             for f in files:
                 file_path = os.path.join(root, f)
-                ziph.write(file_path, os.path.relpath(file_path, path))
+                if archive_format == "tgz":
+                    dst.add(file_path, arcname=os.path.join(model_name, os.path.relpath(file_path, path)))
+                elif archive_format == "no-archive":
+                    dst_dir = os.path.dirname(os.path.join(dst, os.path.relpath(file_path, path)))
+                    ModelExportUtils.make_dir(dst_dir)
+                    shutil.copy(file_path, dst_dir)
+                else:
+                    dst.write(file_path, os.path.relpath(file_path, path))
 
     @staticmethod
     def directory_filter(directory, unwanted_dirs):
@@ -302,10 +349,10 @@ class ModelExportUtils(object):
         :param model_name:
         :return:
         """
-        if not re.match(r'^[A-Za-z][A-Za-z0-9_\-.]*$', model_name):
+        if not re.match(r'^[A-Za-z0-9][A-Za-z0-9_\-.]*$', model_name):
             raise ModelArchiverError("Model name contains special characters.\n"
                                      "The allowed regular expression filter for model "
-                                     "name is: ^[A-Za-z][A-Za-z0-9_\\-.]*$")
+                                     "name is: ^[A-Za-z0-9][A-Za-z0-9_\\-.]*$")
 
     @staticmethod
     def validate_inputs(model_path, model_name, export_path):
