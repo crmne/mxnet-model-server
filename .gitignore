@@ -109,6 +109,9 @@ ENV/
 # PyCharm
 .idea/
 
+# VSCode
+.vscode
+
 # Log
 *.log.*
 
